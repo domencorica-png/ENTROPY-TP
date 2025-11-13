@@ -44,7 +44,11 @@ private:
     // Parametri di smoothing
     int m_confirmation_bars;
     double m_hysteresis_factor;
-    
+
+    // OTTIMIZZAZIONE: Cache handle ATR per evitare creazione ripetuta
+    int m_atr_handle;
+    double m_atr_buffer[];
+
 public:
     // Costruttore
     CEntropyFilter()
@@ -59,12 +63,16 @@ public:
         m_volatility_threshold_max = 3.0;
         m_confirmation_bars = 2;
         m_hysteresis_factor = 0.05;
-        
+
         m_is_sideways = false;
         m_is_chaotic = false;
         m_consecutive_sideways = 0;
         m_consecutive_chaotic = 0;
-        
+
+        // OTTIMIZZAZIONE: Inizializza handle ATR
+        m_atr_handle = INVALID_HANDLE;
+        ArraySetAsSeries(m_atr_buffer, true);
+
         // Inizializza i buffer
         InitializeBuffers();
     }
@@ -88,10 +96,21 @@ public:
         m_volatility_threshold_max = volatility_max;
         m_confirmation_bars = confirmation_bars;
         m_hysteresis_factor = hysteresis;
-        
+
+        // OTTIMIZZAZIONE: Crea handle ATR una sola volta
+        if(m_atr_handle != INVALID_HANDLE)
+            IndicatorRelease(m_atr_handle);
+
+        m_atr_handle = iATR(m_symbol, m_timeframe, 14);
+        if(m_atr_handle == INVALID_HANDLE)
+        {
+            Print("ERRORE EntropyFilter: Impossibile creare handle ATR");
+            return false;
+        }
+
         // Ri-inizializza i buffer con i nuovi parametri
         InitializeBuffers();
-        
+
         return true;
     }
     
@@ -246,22 +265,21 @@ private:
         return MathMax(0.0, MathMin(1.0, entropy));
     }
     
-    // Calcola volatilità normalizzata (ATR relativo)
+    // Calcola volatilità normalizzata (ATR relativo) - OTTIMIZZATO con handle cachato
     double CalculateNormalizedVolatility()
     {
-        int atr_period = 14;
-        double atr[];
-        
-        if(CopyBuffer(iATR(m_symbol, m_timeframe, atr_period), 0, 0, atr_period + 1, atr) <= 0)
+        // OTTIMIZZAZIONE: Usa handle ATR cachato invece di crearne uno nuovo
+        if(m_atr_handle == INVALID_HANDLE)
             return 1.0;
-            
-        ArraySetAsSeries(atr, true);
-        
+
+        if(CopyBuffer(m_atr_handle, 0, 0, 3, m_atr_buffer) <= 0)
+            return 1.0;
+
         double current_price = SymbolInfoDouble(m_symbol, SYMBOL_BID);
         if(current_price == 0) return 1.0;
-        
+
         // ATR normalizzato come percentuale del prezzo
-        return (atr[0] / current_price) * 100.0;
+        return (m_atr_buffer[0] / current_price) * 100.0;
     }
     
     // Determina lo stato del mercato con meccanismo di conferma
@@ -325,6 +343,16 @@ private:
                 m_is_chaotic = false;
                 m_consecutive_chaotic = 0;
             }
+        }
+    }
+
+    // OTTIMIZZAZIONE: Distruttore per rilasciare l'handle ATR
+    ~CEntropyFilter()
+    {
+        if(m_atr_handle != INVALID_HANDLE)
+        {
+            IndicatorRelease(m_atr_handle);
+            m_atr_handle = INVALID_HANDLE;
         }
     }
 };
